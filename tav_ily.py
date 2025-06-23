@@ -45,7 +45,7 @@ agent = create_openai_tools_agent(
 agent_executor = AgentExecutor(agent=agent, tools=[tavily_search, tavily_crawl], verbose=True)
 
 # Example user prompt (can change for any use-case)
-user_input = "I want a strategy for launching an online AI learning platform for Indian college students. Include market scope, pricing, and outreach plan."
+user_input = "I’m thinking of starting a sustainable clothing brand focused on eco-friendly materials.I’m targeting millennials and Gen Z who are environmentally conscious.( market analysis)"
 
 # Run agent
 response = agent_executor.invoke({
