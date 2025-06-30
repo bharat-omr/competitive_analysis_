@@ -2,8 +2,10 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 from langchain_community.utilities import SerpAPIWrapper
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain.chat_models import ChatOpenAI
 import google.generativeai as genai
-from transformers import pipeline
 
 # Load API keys
 load_dotenv()
@@ -11,95 +13,111 @@ os.environ["SERPAPI_API_KEY"] = os.getenv("SERPAPI_API_KEY")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Initialize tools
-search = SerpAPIWrapper()
+search_serp = SerpAPIWrapper()
+search_tavily = TavilySearchResults(max_results=4)
 gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
-# Load intent classifier
-classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+# LLM required for memory summarization
+llm_memory_model = ChatOpenAI(model_name="gpt-4")
 
-# Define possible intents
-candidate_labels = [
-    "business idea",
-    "market research",
-    "find suppliers",
-    "draft business plan",
-    "general question",
-    "small talk"
-]
+# Initialize memory buffer with LLM
+memory = ConversationSummaryBufferMemory(llm=llm_memory_model, max_token_limit=500)
 
-# Extract intent
-def detect_intent(text):
-    result = classifier(text, candidate_labels)
-    return result["labels"][0]  # top predicted label
-
-# Intent handlers
-def handle_market_research(text):
-    result = search.run(text)
-    prompt = f"Summarize these market trends clearly: {result}"
-    return gemini_model.generate_content(prompt).text.strip()
-
-def handle_find_suppliers(text):
-    result = search.run(f"Top suppliers for {text}")
-    prompt = f"List top suppliers from this: {result}"
-    return gemini_model.generate_content(prompt).text.strip()
-
-def handle_draft_plan(text):
-    prompt = f"Draft the business plan section based on: {text}"
-    return gemini_model.generate_content(prompt).text.strip()
-
-def handle_general_question(text):
-    return gemini_model.generate_content(text).text.strip()
-
-def handle_small_talk(text):
-    return "🙂 I'm here to help with anything. Tell me more!"
-
-# Streamlit app
+# Streamlit Web App
 def main():
-    st.set_page_config(page_title="🤖 Modular Smart Assistant", layout="wide")
-    st.title("🧠 Smart Transformer-based AI Assistant")
+    st.set_page_config(page_title="🌐 BizAI - Business Assistant", layout="wide")
+    st.title("🤖 BizAI - Your Smart Business Planning Assistant")
 
-    st.write("Ask about business, research, planning, or anything else!")
+    st.write("I’ll help you develop your business plan, research your market, and find real insights. Just tell me your idea!")
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    # Session memory
+    if "conversation_history" not in st.session_state:
+        st.session_state.conversation_history = []
 
-    for chat in st.session_state.chat_history:
+    # Display past messages
+    for pair in st.session_state.conversation_history:
         with st.chat_message("user"):
-            st.markdown(chat["user"])
+            st.markdown(pair["user"])
         with st.chat_message("assistant"):
-            st.markdown(chat["bot"])
+            st.markdown(pair["bot"])
 
-    user_input = st.chat_input("What's your question?")
+    # New input
+    user_input = st.chat_input("What business idea are you working on?")
     if user_input:
         st.chat_message("user").markdown(user_input)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing and answering..."):
+            with st.spinner("🔍 Thinking and researching..."):
                 try:
-                    intent = detect_intent(user_input)
+                    # Add user input to memory
+                    memory.chat_memory.add_user_message(user_input)
 
-                    if intent == "market research":
-                        answer = handle_market_research(user_input)
-                    elif intent == "find suppliers":
-                        answer = handle_find_suppliers(user_input)
-                    elif intent == "draft business plan":
-                        answer = handle_draft_plan(user_input)
-                    elif intent == "business idea":
-                        answer = f"Great idea! Do you want a market report or competitor analysis for '{user_input}'?"
-                    elif intent == "general question":
-                        answer = handle_general_question(user_input)
-                    else:
-                        answer = handle_small_talk(user_input)
+                    # Create memory context from history summary
+                    memory_summary = memory.buffer if memory.buffer else "No prior context."
 
-                    st.markdown(answer)
-                    st.session_state.chat_history.append({"user": user_input, "bot": answer})
+                    # Web search from both tools
+                    serp_result = search_serp.run(user_input)
+                    tavily_result = search_tavily.run(user_input)
+
+                    # Prompt to Gemini
+                    prompt = f"""
+Hello! I’m your AI market analysis assistant. I’ll help you analysis market for your business.
+Ask follow-up questions in a helpful, strategic tone. Use research tools only when needed.
+For example:
+"Great choice! The sustainable fashion market is growing rapidly. Let’s start by defining your target audience and unique value proposition. Would you like me to conduct market research on eco-friendly clothing trends?"
+
+Only when you have enough information, say: 'Here is your market analysis summary.' and provide a clear market insight using online tools.
+
+**SerpAPI:**
+{serp_result}
+
+**Tavily:**
+{tavily_result}
+
+🧠 Memory Summary:
+{memory_summary}
+
+💬 Current User Question:
+User: {user_input}
+
+Now respond as BizAI in a friendly, structured, and helpful tone. Use bullet points and business-style formatting.
+""".strip()
+
+                    # Gemini response
+                    gemini_response = gemini_model.generate_content(prompt)
+                    response_text = gemini_response.text.strip()
+
+                    # Add assistant response to memory
+                    memory.chat_memory.add_ai_message(response_text)
+
+                    final_answer = (
+                        f"🤖 **BizAI:**\n\n{response_text}\n\n"
+                        "📌 Let me know if you'd like help drafting a section, finding suppliers, or exploring your competition."
+                    )
+
+                    # Show response
+                    st.markdown(final_answer)
+
+                    # Save to conversation history
+                    st.session_state.conversation_history.append({
+                        "user": user_input,
+                        "bot": final_answer
+                    })
 
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
 
+    # Clear history
     st.divider()
-    if st.button("🗑️ Clear Chat", use_container_width=True):
-        st.session_state.chat_history = []
+    if st.button("🗑️ Clear Chat Memory", use_container_width=True):
+        st.session_state.conversation_history = []
+        memory.clear()
+
+# Helper function to remove prefix
+def strip_bot(bot_response):
+    return bot_response.replace("🤖 **BizAI:**", "").replace(
+        "📌 Let me know if you'd like help drafting a section, finding suppliers, or exploring your competition.", ""
+    ).strip()
 
 if __name__ == "__main__":
     main()

@@ -23,7 +23,7 @@ def main():
     # Session memory
     if "conversation_history" not in st.session_state:
         st.session_state.conversation_history = []
-
+  
     # Display past messages
     for pair in st.session_state.conversation_history:
         with st.chat_message("user"):
